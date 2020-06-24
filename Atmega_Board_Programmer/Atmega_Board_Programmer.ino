@@ -7,13 +7,15 @@
 // make some of these false to reduce compile size (the ones you don't want).
 // The Atmega328 is always included (Both Uno and Lilypad versions).
 
+#include <EEPROM.h>
+
 #define USE_ATMEGA8 true
 #define USE_ATMEGA16U2 true    // Uno USB interface chip
 #define USE_ATMEGA32U4 true    // Leonardo
 #define USE_ATMEGA168 true
 #define USE_ATMEGA1280 true
 #define USE_ATMEGA1284 true
-#define USE_ATMEGA2560 true
+#define USE_ATMEGA2560 false
 #define USE_ATMEGA256RFR2 false // Pinoccio Scout
 
 /* ----------------------------------------------------------------------------
@@ -185,6 +187,8 @@ typedef struct {
 #if USE_ATMEGA16U2
   #include "bootloader_atmega16u2.h"  // Uno USB interface chip
 #endif
+#include "bootloader_atmega328_8Mhz.h"
+#include "atmega328p_8Mhz_dualoptiboot.h"
 
 // see Atmega328 datasheet page 298
 const bootloaderType bootloaders [] PROGMEM =
@@ -359,6 +363,37 @@ void getFuseBytes ()
 
 bootloaderType currentBootloader;
 
+void signalDone()
+{
+  bool state = true;
+  SPI.end();
+  pinMode(LED_BUILTIN, OUTPUT);
+  
+  while (1)
+  {
+    digitalWrite(LED_BUILTIN, state);
+    delay(1000);
+    state = !state;
+  }
+}
+
+void signalError(int count)
+{
+  bool state = true;
+  SPI.end();
+  pinMode(LED_BUILTIN, OUTPUT);
+  while (1)
+  {
+    for (int i = 0; i < count; i++)
+    {
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(300);
+    }
+    delay(3000);
+  }
+}
 
 // burn the bootloader to the target device
 void writeBootloader ()
@@ -412,14 +447,18 @@ void writeBootloader ()
   // Atmega328P or Atmega328
   if (currentBootloader.sig [0] == 0x1E &&
       currentBootloader.sig [1] == 0x95 &&
-      (currentBootloader.sig [2] == 0x0F || currentBootloader.sig [2] == 0x14)
+      (currentBootloader.sig [2] == 0x0F || currentBootloader.sig [2] == 0x14 || currentBootloader.sig[2] == 0x16)
       )
     {
-    Serial.println (F("Type 'L' to use Lilypad (8 MHz) loader, or 'U' for Uno (16 MHz) loader ..."));
-    do
+    Serial.println (F("Type 'L' to use Lilypad (8 MHz) loader, or 'U' for Uno (16 MHz) loader, or 'C' for custom 8MHz bootloader, 'D' for dualOptiboot..."));
+    #if 0
+      do
       {
       subcommand = toupper (Serial.read ());
-      } while (subcommand != 'L' && subcommand != 'U');
+      } while (subcommand != 'L' && subcommand != 'U' && subcommand != 'C' && subcommand != 'D');
+    #else
+    subcommand = 'D';
+    #endif
 
     if (subcommand == 'L')  // use internal 8 MHz clock
       {
@@ -430,10 +469,32 @@ void writeBootloader ()
       addr = 0x7800;
       len = sizeof ATmegaBOOT_168_atmega328_pro_8MHz_hex;
       }  // end of using the 8 MHz clock
+    else if (subcommand == 'C')
+      {
+      Serial.println(F("Using 8Mhz resonator bootloader"));
+      bootloader = optiboot_atmega328_pro_8MHz_hex;
+      newextFuse = 0xFE; //BOD 1.7V
+      }
+    else if (subcommand == 'D')
+      {
+        Serial.println(F("Using 8Mhz external clock dual optiboot"));
+        bootloader = atmega328p_8Mhz_dualoptiboot;
+        newlFuse = 0xE2; // internal oscillator
+        newhFuse = 0xDC; // 1024 byte (512 word) bootloader, SPI enabled, boot into bootloader
+        newextFuse = 0xFE; // 1.7V BOD
+        addr = 0x7C00;
+        len = sizeof(atmega328p_8Mhz_dualoptiboot);
+      }
     else
       Serial.println (F("Using Uno Optiboot 16 MHz loader."));
      }  // end of being Atmega328P
-
+  else
+  {
+    EEPROM.write(0, currentBootloader.sig [0]);
+    EEPROM.write(1, currentBootloader.sig [1]);
+    EEPROM.write(2, currentBootloader.sig [2]);
+    signalError(1);
+  }
 
   Serial.print (F("Bootloader address = 0x"));
   Serial.println (addr, HEX);
@@ -446,10 +507,14 @@ void writeBootloader ()
 
   Serial.println (F("Type 'Q' to quit, 'V' to verify, or 'G' to program the chip with the bootloader ..."));
   char command;
+  #if 0
   do
     {
     command = toupper (Serial.read ());
     } while (command != 'G' && command != 'V' && command != 'Q');
+  #else
+  command = 'G';
+  #endif
 
   // let them do nothing
   if (command == 'Q')
@@ -526,6 +591,7 @@ void writeBootloader ()
     Serial.println (F(" verification error(s)."));
     if (errors > 100)
       Serial.println (F("First 100 shown."));
+    signalError(2);
     return;  // don't change fuses if errors
     }  // end if
 
@@ -543,6 +609,7 @@ void writeBootloader ()
     }  // end if programming
 
   Serial.println (F("Done."));
+  signalDone();
 
   } // end of writeBootloader
 
@@ -578,6 +645,7 @@ void getSignature ()
     }  // end of for each signature
 
   Serial.println (F("Unrecogized signature."));
+  signalError(3);
   }  // end of getSignature
 
 void setup ()
@@ -590,13 +658,20 @@ void setup ()
   Serial.println (F("Version " VERSION));
   Serial.println (F("Compiled on " __DATE__ " at " __TIME__ " with Arduino IDE " xstr(ARDUINO) "."));
 
+  Serial.println(F("Last sig:"));
+  for (int i = 0; i < 3; i++)
+  {
+    Serial.print(EEPROM.read(i));
+    Serial.print(' ');
+  }
+  Serial.println();
+
   initPins ();
 
  }  // end of setup
 
 void loop ()
   {
-
   if (startProgramming ())
     {
     getSignature ();
@@ -614,4 +689,3 @@ void loop ()
     {}
 
   }  // end of loop
-

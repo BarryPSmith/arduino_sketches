@@ -39,6 +39,7 @@ def main():
         0x3E00: 0x4000,
         0x7000: 0x8000,
         0x7800: 0x8000,
+		0x7C00: 0x8000,
         0x7E00: 0x8000,
         0xF800: 0x10000,
         0x1F000: 0x20000,
@@ -46,7 +47,7 @@ def main():
         0x3E000: 0x40000,
     }
     if not loaderStart in end_addresses:
-        print "Error: Unkown bootloader start address."
+        print("Error: Unkown bootloader start address: ", hex(loaderStart))
         sys.exit(3)
     loaderEnd = end_addresses[loaderStart]
 

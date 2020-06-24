@@ -251,6 +251,7 @@ bool startProgramming ()
         {
         Serial.println ();
         Serial.println (F("Failed to enter programming mode. Double-check wiring!"));
+        signalError(4);
         return false;
         }  // end of too many attempts
       }  // end of not entered programming mode
